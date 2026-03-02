@@ -1,0 +1,235 @@
+import React, { useState, useEffect } from 'react';
+import { MapPin, Clock, Shield, Siren, Radio } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
+import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
+import 'leaflet/dist/leaflet.css';
+import L from 'leaflet';
+
+// Custom Dot Icons
+const createDotIcon = (color: string) => L.divIcon({
+  className: 'custom-dot-icon',
+  html: `<div style="background-color: ${color}; width: 12px; height: 12px; border-radius: 50%; border: 2px solid white; box-shadow: 0 0 4px rgba(0,0,0,0.5);"></div>`,
+  iconSize: [12, 12],
+  iconAnchor: [6, 6],
+  popupAnchor: [0, -6]
+});
+
+const icons = {
+  Critical: createDotIcon('#ef4444'), // Red-500
+  High: createDotIcon('#f97316'),     // Orange-500
+  Medium: createDotIcon('#eab308'),   // Yellow-500
+  Low: createDotIcon('#3b82f6'),      // Blue-500
+  Default: createDotIcon('#64748b')   // Slate-500
+};
+
+interface Incident {
+  id: number;
+  timestamp: string;
+  location: string;
+  type: string;
+  severity: string;
+  lat: number;
+  lng: number;
+}
+
+// Map Controller to handle flying to location
+function MapController({ selectedLocation }: { selectedLocation: { lat: number, lng: number } | null }) {
+  const map = useMap();
+  useEffect(() => {
+    if (selectedLocation) {
+      map.flyTo([selectedLocation.lat, selectedLocation.lng], 15, {
+        duration: 1.5
+      });
+    }
+  }, [selectedLocation, map]);
+  return null;
+}
+
+export default function LiveMonitor() {
+  const [incidents, setIncidents] = useState<Incident[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedIncidentId, setSelectedIncidentId] = useState<number | null>(null);
+  const [totalIncidents, setTotalIncidents] = useState(0);
+  const [avgResponse, setAvgResponse] = useState("2m 14s");
+
+  useEffect(() => {
+    // Fetch initial total count from history to match Analytics
+    fetch('/api/history')
+      .then(res => res.json())
+      .then(data => setTotalIncidents(data.length))
+      .catch(err => console.error("Failed to fetch initial count", err));
+
+    const fetchIncident = async () => {
+      try {
+        const res = await fetch('/api/live-incident');
+        if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+        const data = await res.json();
+        setIncidents(prev => {
+            // Avoid duplicates if ID exists
+            if (prev.find(i => i.id === data.id)) return prev;
+            
+            // Increment total count for every new unique incident
+            setTotalIncidents(c => c + 1);
+            
+            return [data, ...prev].slice(0, 50);
+        });
+        setLoading(false);
+      } catch (err) {
+        console.error("Failed to fetch incident:", err);
+        // Optional: set loading state or error state if needed
+      }
+    };
+
+    fetchIncident(); // Initial fetch
+    const interval = setInterval(fetchIncident, 3000); // Fetch every 3s
+
+    // Simulate fluctuating response time
+    const responseInterval = setInterval(() => {
+      const mins = 2 + Math.floor(Math.random() * 2); // 2-3 mins
+      const secs = Math.floor(Math.random() * 60);
+      setAvgResponse(`${mins}m ${secs.toString().padStart(2, '0')}s`);
+    }, 5000);
+
+    return () => {
+      clearInterval(interval);
+      clearInterval(responseInterval);
+    };
+  }, []);
+
+  const selectedIncident = incidents.find(i => i.id === selectedIncidentId);
+
+  return (
+    <div className="p-6 space-y-6 h-full overflow-y-auto bg-slate-950 text-slate-200">
+      <header className="flex justify-between items-center border-b border-slate-800 pb-4">
+        <div>
+          <h2 className="text-2xl font-bold text-white tracking-tight flex items-center gap-2">
+            <Radio className="text-red-500 animate-pulse" />
+            Live Incident Feed
+          </h2>
+          <p className="text-sm text-slate-500 mt-1">Real-time surveillance data stream</p>
+        </div>
+        <div className="flex items-center gap-6">
+          <div className="flex flex-col items-end">
+            <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Avg Response</span>
+            <span className="text-2xl font-bold text-white leading-none font-mono">{avgResponse}</span>
+          </div>
+          <div className="flex flex-col items-end">
+            <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Total Active</span>
+            <span className="text-2xl font-bold text-white leading-none font-mono">{totalIncidents}</span>
+          </div>
+          <div className="flex items-center gap-2 bg-slate-900 px-3 py-1 rounded-full border border-slate-800">
+            <span className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></span>
+            <span className="text-xs font-mono text-red-400">LIVE CONNECTION</span>
+          </div>
+        </div>
+      </header>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Incident List */}
+        <div className="lg:col-span-1 space-y-4 h-[600px] overflow-y-auto pr-2">
+          <AnimatePresence mode='popLayout'>
+            {incidents.map((incident, index) => (
+              <motion.div
+                key={incident.id}
+                initial={{ opacity: 0, x: -20, scale: 0.95 }}
+                animate={{ opacity: 1, x: 0, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.9 }}
+                layout
+                onClick={() => setSelectedIncidentId(incident.id)}
+                className={`relative overflow-hidden rounded-xl border p-4 transition-all cursor-pointer group ${
+                  selectedIncidentId === incident.id
+                    ? 'bg-slate-800 border-slate-600 shadow-lg shadow-blue-900/20 ring-1 ring-slate-500'
+                    : incident.severity === 'Critical' 
+                      ? 'bg-red-950/20 border-red-900/50 hover:bg-red-950/30' 
+                      : 'bg-slate-900/50 border-slate-800 hover:bg-slate-800'
+                }`}
+              >
+                <div className="flex justify-between items-start relative z-10">
+                  <div className="flex items-start gap-3">
+                    <div className={`p-2 rounded-lg ${
+                      incident.severity === 'Critical' ? 'bg-red-500/20 text-red-500' : 'bg-slate-800 text-slate-400'
+                    }`}>
+                      {incident.severity === 'Critical' ? <Siren className="w-5 h-5 animate-bounce" /> : <Shield className="w-5 h-5" />}
+                    </div>
+                    <div>
+                      <h3 className="font-semibold text-white text-sm">{incident.type}</h3>
+                      <div className="flex flex-col gap-1 mt-1 text-xs text-slate-400">
+                        <span className="flex items-center gap-1">
+                          <MapPin className="w-3 h-3" /> {incident.location}
+                        </span>
+                        <span className="flex items-center gap-1 font-mono opacity-70">
+                          <Clock className="w-3 h-3" /> {new Date(incident.timestamp).toLocaleTimeString()}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="text-xs font-mono text-slate-500 font-bold pt-1 opacity-50">
+                    #{incidents.length - index}
+                  </div>
+                </div>
+              </motion.div>
+            ))}
+          </AnimatePresence>
+          
+          {loading && (
+            <div className="flex justify-center p-8">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-red-500"></div>
+            </div>
+          )}
+        </div>
+
+        {/* Map Visualization */}
+        <div className="lg:col-span-2 bg-slate-900/50 border border-slate-800 rounded-xl overflow-hidden h-[600px] relative z-0">
+            <MapContainer 
+                center={[17.3850, 78.4867]} 
+                zoom={13} 
+                style={{ height: '100%', width: '100%' }}
+                className="z-0"
+            >
+                <TileLayer
+                    attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
+                    url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
+                />
+                
+                <MapController selectedLocation={selectedIncident ? { lat: selectedIncident.lat, lng: selectedIncident.lng } : null} />
+
+                {/* Incident Markers */}
+                {incidents.map((incident) => (
+                    <Marker 
+                        key={incident.id} 
+                        position={[incident.lat, incident.lng]}
+                        icon={icons[incident.severity as keyof typeof icons] || icons.Default}
+                        eventHandlers={{
+                          click: () => {
+                            setSelectedIncidentId(incident.id);
+                          },
+                        }}
+                    >
+                        <Popup className="custom-popup">
+                            <div className="text-slate-900 min-w-[150px]">
+                                <strong className="text-sm block mb-1">{incident.type}</strong>
+                                <div className="text-xs text-slate-600 mb-2">{incident.location}</div>
+                                <span className={`text-[10px] font-bold px-2 py-1 rounded-full text-white ${
+                                  incident.severity === 'Critical' ? 'bg-red-600' : 
+                                  incident.severity === 'High' ? 'bg-orange-500' :
+                                  incident.severity === 'Medium' ? 'bg-yellow-500' : 'bg-blue-500'
+                                }`}>
+                                    {incident.severity.toUpperCase()}
+                                </span>
+                            </div>
+                        </Popup>
+                    </Marker>
+                ))}
+            </MapContainer>
+            
+            <div className="absolute top-4 right-4 bg-slate-900/80 backdrop-blur p-2 rounded border border-slate-700 z-[1000]">
+                <div className="text-xs font-mono text-slate-300 mb-1">MAP LAYERS</div>
+                <div className="flex items-center gap-2 text-xs text-slate-400">
+                    <span className="w-2 h-2 rounded-full bg-blue-500"></span> Incidents
+                </div>
+            </div>
+        </div>
+      </div>
+    </div>
+  );
+}
